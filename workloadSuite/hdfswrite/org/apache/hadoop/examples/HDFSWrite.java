@@ -189,10 +189,12 @@ public class HDFSWrite extends Configured implements Tool {
           (valueSizeRange != 0 ? random.nextInt(valueSizeRange) : 0);
         randomValue.setSize(valueLength);
         randomizeBytes(randomValue.get(), 0, randomValue.getSize());
-        output.collect(randomKey, randomValue);
         numBytesToWrite -= keyLength + valueLength;
-        reporter.incrCounter(Counters.BYTES_WRITTEN, keyLength + valueLength);
-        reporter.incrCounter(Counters.RECORDS_WRITTEN, 1);
+        if (numBytesToWrite > 0) {
+          output.collect(randomKey, randomValue);
+          reporter.incrCounter(Counters.BYTES_WRITTEN, keyLength + valueLength);
+          reporter.incrCounter(Counters.RECORDS_WRITTEN, 1);
+        }
         if (++itemCount % 200 == 0) {
           reporter.setStatus("wrote record " + itemCount + ". " + 
                              numBytesToWrite + " bytes left.");
@@ -207,17 +209,24 @@ public class HDFSWrite extends Configured implements Tool {
      */
     @Override
     public void configure(JobConf job) {
-      numBytesToWrite = job.getLong("test.randomwrite.bytes_per_map",
-                                    1*1024*1024*1024);
+//      numBytesToWrite = job.getLong("test.randomwrite.bytes_per_map",
+//                                    1*1024*1024*1024);
+//      minKeySize = job.getInt("test.randomwrite.min_key", 10);
+//      keySizeRange = 
+//        job.getInt("test.randomwrite.max_key", 1000) - minKeySize;
+//      minValueSize = job.getInt("test.randomwrite.min_value", 0);
+//      valueSizeRange = 
+//        job.getInt("test.randomwrite.max_value", 20000) - minValueSize;
+      numBytesToWrite = CHUNK_SIZE;
       minKeySize = job.getInt("test.randomwrite.min_key", 10);
-      keySizeRange = 
-        job.getInt("test.randomwrite.max_key", 1000) - minKeySize;
+      keySizeRange = job.getInt("test.randomwrite.max_key", 1000) - minKeySize;
       minValueSize = job.getInt("test.randomwrite.min_value", 0);
-      valueSizeRange = 
-        job.getInt("test.randomwrite.max_value", 20000) - minValueSize;
+      valueSizeRange = job.getInt("test.randomwrite.max_value", 20000) - minValueSize;
     }
     
   }
+  
+  final static long CHUNK_SIZE = 120l * 1024l * 1024l - 1000l;
   
   /**
    * This is the main routine for launching a distributed random write job.
@@ -228,13 +237,29 @@ public class HDFSWrite extends Configured implements Tool {
    */
   public int run(String[] args) throws Exception {    
     if (args.length == 0) {
-      System.out.println("Usage: writer <out-dir>");
+      System.out.println("Usage: writer <out-dir> <num-maps>");
       ToolRunner.printGenericCommandUsage(System.out);
       return -1;
     }
     
     Path outDir = new Path(args[0]);
     JobConf job = new JobConf(getConf());
+    
+    int numMaps = -1;
+    try {
+      numMaps = Integer.parseInt(args[1]);
+    }
+    catch (NumberFormatException e) {
+      System.out.println("Usage: writer <out-dir> <num-maps>");
+      ToolRunner.printGenericCommandUsage(System.out);
+      return -2;
+    }
+    
+    if (numMaps < 0) {
+      System.out.println("Usage: writer <out-dir> <num-maps>");
+      ToolRunner.printGenericCommandUsage(System.out);
+      return -2;      
+    }
     
     job.setJarByClass(HDFSWrite.class);
     job.setJobName("hdfsWrite");
@@ -250,15 +275,15 @@ public class HDFSWrite extends Configured implements Tool {
     
     JobClient client = new JobClient(job);
     ClusterStatus cluster = client.getClusterStatus();
-    int numMapsPerHost = job.getInt("test.randomwriter.maps_per_host", 10);
-    long numBytesToWritePerMap = job.getLong("test.randomwrite.bytes_per_map",
-                                             1*1024*1024*1024);
-    if (numBytesToWritePerMap == 0) {
-      System.err.println("Cannot have test.randomwrite.bytes_per_map set to 0");
-      return -2;
-    }
-    long totalBytesToWrite = job.getLong("test.randomwrite.total_bytes", 
-         numMapsPerHost*numBytesToWritePerMap*cluster.getTaskTrackers());
+//    int numMapsPerHost = job.getInt("test.randomwriter.maps_per_host", 10);
+//    long numBytesToWritePerMap = job.getLong("test.randomwrite.bytes_per_map",
+//                                             1*1024*1024*1024);
+//    if (numBytesToWritePerMap == 0) {
+//      System.err.println("Cannot have test.randomwrite.bytes_per_map set to 0");
+//      return -2;
+//    }
+//    long totalBytesToWrite = job.getLong("test.randomwrite.total_bytes", 
+//         numMapsPerHost*numBytesToWritePerMap*cluster.getTaskTrackers());
     /*
     int numMaps = (int) (totalBytesToWrite / numBytesToWritePerMap);
     if (numMaps == 0 && totalBytesToWrite > 0) {
@@ -267,7 +292,7 @@ public class HDFSWrite extends Configured implements Tool {
     }
     */
 
-    int numMaps = (int) (totalBytesToWrite / numBytesToWritePerMap);
+//    final int numMaps = (int) (totalBytesToWrite / numBytesToWritePerMap);
     job.setNumMapTasks(numMaps);
 
     System.out.println("client.getClusterStatus().getMaxMapTasks() gives " + cluster.getMaxMapTasks());
@@ -276,8 +301,8 @@ public class HDFSWrite extends Configured implements Tool {
     System.out.println("Running on " +
 		       cluster.getTaskTrackers() + " nodes with " +
 		       numMaps + " maps, \n" +
-		       "writing " + totalBytesToWrite + " bytes with " +
-		       numBytesToWritePerMap + " bytes per map."); 
+		       "writing " + (CHUNK_SIZE * numMaps) + " bytes with " +
+		       CHUNK_SIZE + " bytes per map."); 
 
     // reducer NONE
     job.setNumReduceTasks(0);
